@@ -9,6 +9,7 @@
 //Output is also an echo of all incoming MIDI traffice to the Serial Out (ie, MIDI out)
 
 typedef unsigned long micros_t;
+typedef unsigned long millis_t;
 
 #define ECHOMIDI (true)
 
@@ -37,18 +38,30 @@ byte byte3;
 //int newNote=0;
 //int FS1,FS2;
 
-#define OUTPIN_MODE  OUTPUT  //INPUT or OUTPUT?  INPUT gives more protection
-#define OUTPIN_16H  A0
-#define OUTPIN_16L  A1
-#define OUTPIN_8H  A2
-#define OUTPIN_8L  A3
+//define analog input pins for reading the analog inputs
+#define N_INPUTS (2)
+int inputPin[] = {A0, A1};
+#define N_PUSHBUTTONS (3)
+int pushbuttonPin[] = {2,3,4};
+int prevPushbuttonState[N_PUSHBUTTONS];
+boolean flag_middlePushbutton = false;
 
-#define MIDI_PPQN 24
-int pulsesPer16th = 0;
-int pulsesPer8th = 0;
-int pulsesPerTriggerActive = 0;
+//define the midi timing info
+#define MIDI_PPQN 24  //how many MIDI time pulses per quarter note...24 is standard
 micros_t lastMessageReceived_micros=0;
 micros_t pulseTimeout_micros = 2000000UL;
+
+//define the outputs
+#define OUTPIN_MODE  OUTPUT  //INPUT or OUTPUT?  INPUT gives more protection
+#define N_OUTPUTS (2)   //how many outputs are attached
+#define N_COUNTERS (N_OUTPUTS+1)  //the extra counter is for the LED
+int pulseCountsPerOutput[N_COUNTERS]; //how many midi pulses before issuing a trigger command
+int pulse_counter[N_COUNTERS];
+int outputPin_high[] = {A2, A4, STAT1};
+int outputPin_low[] = {A3, A5, 8}; //the last one can be any pin at all that is not yet used
+
+
+#define ANALOG_UPDATE_MILLIS 200  //update analog inputs after this period of milliseconds
 
 void turnOnStatLight(int pin) {
   digitalWrite(pin,LOW);
@@ -67,46 +80,102 @@ void deactivateTrigger(int pinToLow, int pinToHigh, int LEDpin) {
     if (LEDpin > 0) turnOffStatLight(LEDpin);
 }
 void setup() {
-  
-  //set pin modes
+    
+  //set pin modes for the lights
   pinMode(STAT1,OUTPUT);
   pinMode(STAT2,OUTPUT);
-  pinMode(OUTPIN_16H,OUTPIN_MODE);
-  pinMode(OUTPIN_16L,OUTPIN_MODE);
-  pinMode(OUTPIN_8H,OUTPIN_MODE);
-  pinMode(OUTPIN_8L,OUTPIN_MODE);
   
-  //initialize variables
-  pulsesPer16th = MIDI_PPQN / 4;
-  pulsesPer8th = MIDI_PPQN / 2;
-  pulsesPerTriggerActive = pulsesPer16th/2;
+  //set pin modes for the analog inputs
+  for (int I=0;I<N_INPUTS;I++) {
+    pinMode(inputPin[I],INPUT);
+  }
+
+  //set pin modes for the pushbuttons
+  for (int I=0;I<N_PUSHBUTTONS;I++) {
+    pinMode(pushbuttonPin[I],INPUT_PULLUP);
+    prevPushbuttonState[I] = HIGH; //initialize
+  } 
+  
+  //attach interrupts to the pin
+  attachInterrupt(1,serviceMiddlePushbutton, RISING);
+    
+  //initialize output-related variables
+  for (int I=0; I<N_COUNTERS; I++) {
+    pinMode(outputPin_high[I],OUTPIN_MODE);
+    pinMode(outputPin_low[I],OUTPIN_MODE);
+    pulseCountsPerOutput[I] = MIDI_PPQN; //init to 16th notes
+  }
+  
+  //reset the counters
+  resetCounters();
   
   //start serial with midi baudrate 31250
   Serial.begin(31250);     
 }
 
 void loop () {
-  //static byte incomingByte;
-  //static int noteNum;
-  //static int velocity;
-  static int pulse_counter = -1;
-  micros_t currentTime_micros=0;
-  //static int pot;
-  //static int gate;
-  int rem8, rem16;
-  static boolean MIDI_LED_state = false;
-  static micros_t lastMIDImessage_millis=0;
-  unsigned long loopCount=0;
 
-  //begin code
-  
-  //check to see if there's been any MIDI traffic...if not, shut off the LED
+  micros_t currentTime_micros=0;
+  static boolean MIDI_LED_state = false;
+  static millis_t curTime_millis=0;
+  static millis_t lastMIDImessage_millis=0;
+  static millis_t lastAnalogInputs_millis=0;
+  static unsigned long loopCount=0;
+ 
+   //service interrupts
+   if (flag_middlePushbutton) {
+     resetCounters();
+     flag_middlePushbutton=false;
+   }
+     
+  //check some time-based things
   loopCount++;
-  if (loopCount > 10000) {
+  if (loopCount > 25) {
+    //Serial.println("loop count achieved");
     loopCount=0;
-    micros_t curTime_millis = millis();
+    curTime_millis = millis();
+    
+    //check to see if there's been any MIDI traffic...if not, shut off the LED
     if (curTime_millis < lastMIDImessage_millis) lastMIDImessage_millis = 0; //simplistic reset
     if ((curTime_millis - lastMIDImessage_millis) > 1000) turnOffStatLight(STAT2); //turn off after 1 second
+    
+    //see if it's time to check the user analog inputs
+    if (curTime_millis < lastAnalogInputs_millis) {
+      //Serial.println("reseting lastAnalogInputs_millis");
+      lastAnalogInputs_millis = 0; //simplistic reset
+    }
+    if ((curTime_millis - lastAnalogInputs_millis) > ANALOG_UPDATE_MILLIS) {
+      lastAnalogInputs_millis = curTime_millis;
+      
+      //check the potentiometers
+      for (int I=0;I<N_INPUTS;I++) {
+        //read analog input and decide what the MIDI clock divider should be
+        int val = analogRead(inputPin[I]);
+        pulseCountsPerOutput[I] = convertAnalogReadToPulseDivider(val);
+//        Serial.print("pulseCounterPerOutput ");Serial.print(I);Serial.print(": ");
+//        Serial.print(val); Serial.print(", ");
+//        Serial.println(pulseCountsPerOutput[I]);
+      }
+      
+      //check the pushbuttons
+      for (int I=0;I<N_PUSHBUTTONS;I++) {
+        if (I != 1) { //don't service the middle pushbutton because it's on an interrupt
+          int val = digitalRead(pushbuttonPin[I]);
+          switch (I) {
+            case 0:
+              if ((val==HIGH) && (prevPushbuttonState[I]==LOW)) resetCounters();
+              break;
+  //          case 1:
+  //            if ((val==HIGH) && (prevPushbuttonState[I]==LOW)) resetCounters();
+  //            break;
+            case 2:
+              if ((val==HIGH) && (prevPushbuttonState[I]==LOW)) resetCounters();
+              break;          
+          }
+          prevPushbuttonState[I] = val;
+        }
+      }
+    }
   }
 
   //Are there any MIDI messages
@@ -121,46 +190,33 @@ void loop () {
     //act on the byte
     switch (byte1) {
       case 0xF8:  //MIDI Clock Pulse
-        //increment the pulse counter
-        pulse_counter++;
-        if (pulse_counter >= MIDI_PPQN) pulse_counter = 0;
+      
+        //maybe a lot of time has passed because the cable was unplugged.
+        //if so, ...check to see if enough time has passed to reset the counter
         currentTime_micros = micros();
-        
-        //check to see if enough time has passed to reset
-        if (currentTime_micros < lastMessageReceived_micros) {
-          //it wrapped around
-          lastMessageReceived_micros = 0; //simplistic assumption
-        }
-        if ((currentTime_micros - lastMessageReceived_micros) > pulseTimeout_micros) {
-          //reset the counter!
-          pulse_counter = 0; 
-        }
+        if (currentTime_micros < lastMessageReceived_micros) lastMessageReceived_micros = 0; //it wrapped around, simplistic reset
+        if ((currentTime_micros - lastMessageReceived_micros) > pulseTimeout_micros) resetCounters(); //reset the counters!
         lastMessageReceived_micros = currentTime_micros;
-       
-        //act upon the counter
-        rem16 = pulse_counter % pulsesPer16th;
-        if (rem16 == 0) {
-          activateTrigger(OUTPIN_16H,OUTPIN_16L,0);
-        //} else if (rem16 >= pulsesPerTriggerActive) {
-        } else if (rem16 >= 1) {
-          deactivateTrigger(OUTPIN_16H,OUTPIN_16L,0);
-        }
-        rem8 = pulse_counter % pulsesPer8th;
-        if (rem8 == 0) {
-          activateTrigger(OUTPIN_8H,OUTPIN_8L,0);
-        } else if (rem8 >= pulsesPerTriggerActive) {
-          deactivateTrigger(OUTPIN_8H,OUTPIN_8L,0);
-        }
-        if (pulse_counter == 0) {
-          //quarter note
-          turnOnStatLight(STAT1);
-        } else if (pulse_counter >= pulsesPerTriggerActive) {
-          turnOffStatLight(STAT1);
+      
+        //loop over each channel
+        for (int Icounter=0;Icounter<N_COUNTERS;Icounter++) {
+          //increment the pulse counter
+          pulse_counter[Icounter]++;
+          
+          //fit within allowed expanse for this channel
+          pulse_counter[Icounter] %= pulseCountsPerOutput[Icounter];
+
+          //act upon the counter
+          if (pulse_counter[Icounter] == 0) {
+              activateTrigger(outputPin_high[Icounter],outputPin_low[Icounter],0);
+          } else if (pulse_counter[Icounter] >= min(pulseCountsPerOutput[Icounter]/2,MIDI_PPQN/2)) {
+            deactivateTrigger(outputPin_high[Icounter],outputPin_low[Icounter],0);
+          }
         }
         break;
       case 0xFA:  //MIDI Clock Start
         //restart the counter
-        pulse_counter = -1;
+        resetCounters();
         
         //reset the two triggers
         //deactivateTrigger(OUTPIN_16H,OUTPIN_16L,STAT1);
@@ -182,5 +238,23 @@ void loop () {
   }
 }
 
+void resetCounters(void) {
+  for (int I=0;I<N_COUNTERS;I++) {
+    pulse_counter[I]=-1;  //set so that the next one will be zero
+  }
+}
 
+#define N_PULSE_OPTIONS 14
+#define MAX_ANALOG_READ_COUNTS 1023
+static int choices_pulsesDivider[] = {3,    4,     6,     8,   12,    16,   24,    32,    48,    96,   144,   192};
+int convertAnalogReadToPulseDivider(int analogVal) {
+  static int COUNTS_PER_INDEX = MAX_ANALOG_READ_COUNTS / N_PULSE_OPTIONS;
+  int index = analogVal / COUNTS_PER_INDEX;  //rounds down
+  index = constrain(index,0,N_PULSE_OPTIONS-1);
+  return choices_pulsesDivider[index];
+}
+  
+void serviceMiddlePushbutton(void) {
+  flag_middlePushbutton=true;
+}
 
