@@ -163,13 +163,13 @@ void loop () {
           int val = digitalRead(pushbuttonPin[I]);
           switch (I) {
             case 0:
-              if ((val==HIGH) && (prevPushbuttonState[I]==LOW)) resetCounters();
+              if ((val==HIGH) && (prevPushbuttonState[I]==LOW)) stepCountersBack();
               break;
   //          case 1:
   //            if ((val==HIGH) && (prevPushbuttonState[I]==LOW)) resetCounters();
   //            break;
             case 2:
-              if ((val==HIGH) && (prevPushbuttonState[I]==LOW)) resetCounters();
+              if ((val==HIGH) && (prevPushbuttonState[I]==LOW)) stepCountersBack();
               break;          
           }
           prevPushbuttonState[I] = val;
@@ -204,11 +204,15 @@ void loop () {
           pulse_counter[Icounter]++;
           
           //fit within allowed expanse for this channel
-          pulse_counter[Icounter] %= pulseCountsPerOutput[Icounter];
+          //pulse_counter[Icounter] %= pulseCountsPerOutput[Icounter];
+          int val = pulse_counter[Icounter];
+          while (val > (pulseCountsPerOutput[Icounter]-1)) val -= pulseCountsPerOutput[Icounter];  //faster than mod operator
+          while (val < 0)  val += pulseCountsPerOutput[Icounter]; //faster than mod operator
+          pulse_counter[Icounter] = val;
 
           //act upon the counter
           if (pulse_counter[Icounter] == 0) {
-              activateTrigger(outputPin_high[Icounter],outputPin_low[Icounter],0);
+            activateTrigger(outputPin_high[Icounter],outputPin_low[Icounter],0);
           } else if (pulse_counter[Icounter] >= min(pulseCountsPerOutput[Icounter]/2,MIDI_PPQN/2)) {
             deactivateTrigger(outputPin_high[Icounter],outputPin_low[Icounter],0);
           }
@@ -217,10 +221,6 @@ void loop () {
       case 0xFA:  //MIDI Clock Start
         //restart the counter
         resetCounters();
-        
-        //reset the two triggers
-        //deactivateTrigger(OUTPIN_16H,OUTPIN_16L,STAT1);
-        //deactivateTrigger(OUTPIN_8H,OUTPIN_8L,STAT2);
         break;
     }
     
@@ -240,13 +240,27 @@ void loop () {
 
 void resetCounters(void) {
   for (int I=0;I<N_COUNTERS;I++) {
-    pulse_counter[I]=-1;  //set so that the next one will be zero
+    //set so that the next one will be zero
+    pulse_counter[I]=-1;  
+    
+    //deactivate the Trigger so that it is ready to activate on the next MIDI pulse
+    deactivateTrigger(outputPin_high[I],outputPin_low[I],0);
   }
 }
 
-#define N_PULSE_OPTIONS 14
+void stepCountersBack(void) {
+  for (int I=0;I<N_COUNTERS;I++) {
+    pulse_counter[I] -= 1;    
+    //pulse_counter[Icounter] %= pulseCountsPerOutput[Icounter]; //fit within allowed expanse for this channel
+  }
+}
 #define MAX_ANALOG_READ_COUNTS 1023
-static int choices_pulsesDivider[] = {3,    4,     6,     8,   12,    16,   24,    32,    48,    96,   144,   192};
+//#define N_PULSE_OPTIONS 12
+//static int choices_pulsesDivider[] = {3,    4,     6,     8,   12,    16,   24,    32,      48,    96,   144,   192};
+//#define N_PULSE_OPTIONS 12
+//static int choices_pulsesDivider[] =  {3,            6,     8,    12,   16,   24,    32,      48,    72,    96,    144,   192};  //assumed 24 PPQN
+#define N_PULSE_OPTIONS 12
+static int choices_pulsesDivider[] =  {3,            6,     8,    12,   16,   24,        36,  48,    72,    96,    144,   192};//assumed 24 PPQN
 int convertAnalogReadToPulseDivider(int analogVal) {
   static int COUNTS_PER_INDEX = MAX_ANALOG_READ_COUNTS / N_PULSE_OPTIONS;
   int index = analogVal / COUNTS_PER_INDEX;  //rounds down
