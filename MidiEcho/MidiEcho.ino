@@ -26,6 +26,9 @@ byte byte1, byte2, byte3;  //standard 3 byte MIDI transmission
 void setup() {
   pinMode(STAT1,OUTPUT); //prepare the LED outputs
   pinMode(STAT2,OUTPUT); //prepare the LED outputs
+  turnOffStatLight(STAT1);     //turn off the STAT1 light
+  turnOffStatLight(STAT2);     //turn off the STAT1 light
+
   
   //start serial with midi baudrate 31250
   Serial.begin(31250);     
@@ -39,22 +42,12 @@ void loop () {
   //static int gate;
 
   turnOffStatLight(STAT1);     //turn off the STAT1 light
-  
-  //read analog inputs
-  
-  //pot = analogRead(KNOB1);
-  //note = pot/8;  // convert value to value 0-127
-  //gate = analogRead(KNOB2);
-  //if (gate > 256) { gate=HIGH; } else { gate=LOW; };
-  //FS1 = analogRead(A0); if (FS1 > 200) { FS1 = LOW; turnOffStatLight(STAT1);} else { FS1 = HIGH; turnOnStatLight(STAT1);}
-  //FS2 = analogRead(A1); if (FS2 > 200) { FS2 = LOW; turnOffStatLight(STAT2);} else { FS2 = HIGH; turnOnStatLight(STAT2);}
-  
-  
+ 
   //Are there any MIDI messages
   if(Serial.available() > 0)
   {
     turnOnStatLight(STAT1);   //turn on the STAT1 light indicating that it's received some Serial comms
-    
+
     //read the first byte
     byte1 = Serial.read();
 
