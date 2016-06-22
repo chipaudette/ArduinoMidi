@@ -1,52 +1,31 @@
 // SparkFun MIDI Sheild and MIDI Breakout test code
 // Defines bare-bones routines for sending and receiving MIDI data
-// Written 02/16/10
-//include <Streaming.h>
-//include <String.h>
-//include <avr/pgmspace.h>
-//include "types.h"
-//include "notes.h"
-//include "wT128_allVow.h"
-//#include "wT128_saw.h"
+// 
+// Chip Audette.  http://synthhacker.blogspot.com
+//
+// Updated June 2016
+
 
 #define ECHOMIDI (true)
+#define ECHOMIDI_CLOCK (false)
 
-// defines for MIDI Shield components only
-#define KNOB1  0
-#define KNOB2  1
+// defines for MIDI Shield components (NOT needed if you just want to echo the MIDI codes)
+#define KNOB1  0   //potentiometer on sparkfun MIDI shield
+#define KNOB2  1   //potentiometer on sparkfun MIDI shield
+#define BUTTON1  2  //pushbutton on sparkfun MIDI shield
+#define BUTTON2  3  //pushbutton on sparkfun MIDI shield
+#define BUTTON3  4  //pushbutton on sparkfun MIDI shield
+#define STAT1  7   //status LED on sparkfun MIDI shield
+#define STAT2  6   //status LED on sparkfun MIDI shield
 
-#define BUTTON1  2
-#define BUTTON2  3
-#define BUTTON3  4
-
-#define STAT1  7
-#define STAT2  6
-
-#define OFF 1
-#define ON 2
-#define WAIT 3
-
-//define ISR_HIGHLOW_PIN 9
-
-byte byte1;
-byte byte2;
-byte byte3;
-//int noteTranspose = -27;
-//int curNote=0;
-//int newNote=0;
-int FS1,FS2;
-
-//define N_POLY 3
-//volatile noteStruct allNotes[N_POLY];
-//define HALF_STEP_FRAC (0.05946309)
-
-//#define OUT_PIN 11
-//float targSampleRate_Hz = 5000;  //up to 14000...7812.5...if PWM is at 16MHz/256/2, this is 4 PWM periods
+//other variables
+byte byte1, byte2, byte3;  //standard 3 byte MIDI transmission
+//int FS1,FS2; //foot swtiches connected to the analog inputs
 
 
 void setup() {
-  pinMode(STAT1,OUTPUT);
-  pinMode(STAT2,OUTPUT);
+  pinMode(STAT1,OUTPUT); //prepare the LED outputs
+  pinMode(STAT2,OUTPUT); //prepare the LED outputs
   
   //start serial with midi baudrate 31250
   Serial.begin(31250);     
@@ -71,7 +50,6 @@ void loop () {
   //FS2 = analogRead(A1); if (FS2 > 200) { FS2 = LOW; turnOffStatLight(STAT2);} else { FS2 = HIGH; turnOnStatLight(STAT2);}
   
   
-  
   //Are there any MIDI messages
   if(Serial.available() > 0)
   {
@@ -79,14 +57,15 @@ void loop () {
     
     //read the first byte
     byte1 = Serial.read();
-    //Serial.write(byte1);
-    
+
     
     if (byte1 == 0xF8) {
       //timing signal, skip
+      if (ECHOMIDI_CLOCK) Serial.write(byte1);
     } else {
       if (ECHOMIDI) Serial.write(byte1);
-      
+
+      //none of the rest is needed if you just want to echo the MIDI codes
       if ((byte1 == 0x90) | (byte1 == 0x80) | (byte1 == 0xB0)) {
         byte2 = 0xF8;
         while (byte2 == 0xF8) { while (Serial.available() == 0); byte2 = Serial.read(); }//wait and read 2nd byte in message
@@ -106,31 +85,17 @@ void loop () {
         case 0x90:
           //note on message
           turnOnStatLight(STAT2);//turn on STAT2 light indicating that a note is active
-          
-          //add a note
           //while (Serial.available() == 0); byte2 = Serial.read(); //wait and read 2nd byte in message
-          //noteNum = (int)byte2;
-          //velocity = (int)byte3;
-          //addNote(noteNum,velocity);
-          //addNotePair(noteNum,velocity);
           
           break;
       case 0x80:
+        //note off message
         turnOffStatLight(STAT2);//turn off light that had been indicating that a note was active
-        
-        //note off
         //while (Serial.available() == 0); byte2 = Serial.read(); //wait and read 2nd byte in message
-        //velocity = (int)byte3;
-        //stopNote(noteNum,velocity);
-        //if (noteNum == allNotes[0].noteID) {
-          //allNotes[0].is_active = false;
-          //allNotes[1].is_active = false;
-          //stopAllNotes;
-        //}
+
         break;
       case 0xB0:
         //CC changes (mod wheel, footswitch, etc)
-        //waveIndex = constrain((int)byte3 >> 2,0,N_WAVES -1);
         break;
       }
     }
