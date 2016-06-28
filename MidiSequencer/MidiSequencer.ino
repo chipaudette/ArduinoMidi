@@ -229,6 +229,7 @@ void addNoteOffMidiCodes(int cur_time_ind) {
           //add the NOTE_OFF mesage to the MIDI command buffer
           for (int j=noteOff_count; j < noteOn_count; j++) { //add a notoff for every extra note on
             saveMessage(cur_time_ind,new_message);
+            Serial.write(new_message,3); //and write the new message to turn off the note
           }
         }
       }
