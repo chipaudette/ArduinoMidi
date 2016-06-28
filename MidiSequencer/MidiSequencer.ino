@@ -11,9 +11,11 @@
 // 
 // Chip Audette.  http://synthhacker.blogspot.com
 // Created June 2016
+//
 
 
 #define ECHOMIDI (false)
+#define ECHOMIDI_BIN (false)
 #define ECHOMIDI_CLOCK (false)
 
 // define sequencer limits
@@ -26,18 +28,17 @@
 #define MIDI_CLOCK (0xF8) //Code for MIDI Clock
 #define NOTE_ON    (0x90+MIDI_CHAN) //Code for MIDI Note On
 #define NOTE_OFF   (0x80+MIDI_CHAN) //Code for MIDI Note Off
-#define MIDI_CC    (0b10110000+MIDI_CHAN) //Code for MIDI CC
-#define MIDI_AT    (0b11010000+MIDI_CHAN) //Code for Per-Channel Aftertouch
-#define MIDI_PB    (0b11100000+MIDI_CHAN) //pitch bend
+#define MIDI_CC    (0xB0+MIDI_CHAN) //Code for MIDI CC
+//define MIDI_AT   (0b11010000+MIDI_CHAN) //Code for Per-Channel Aftertouch
+#define MIDI_PB    (0xE0+MIDI_CHAN) //pitch bend
+#define MODWHEEL_CC     (0x01)  //CC code for the mod wheel (for my prophet 6)
 
 // defines for MIDI Shield components (NOT needed if you just want to echo the MIDI codes)
 #define KNOB1  0   //potentiometer on sparkfun MIDI shield
 #define KNOB2  1   //potentiometer on sparkfun MIDI shield
-#define BUTTON1  2  //pushbutton on sparkfun MIDI shield
-#define BUTTON2  3  //pushbutton on sparkfun MIDI shield
-#define BUTTON3  4  //pushbutton on sparkfun MIDI shield
 #define STAT1  7   //status LED on sparkfun MIDI shield
 #define STAT2  6   //status LED on sparkfun MIDI shield
+
 
 //define variables
 byte foo_byte, rx_bytes[3];  //standard 3 byte MIDI transmission
@@ -45,11 +46,43 @@ int byte_counter=-1;
 byte MIDI_command_buffer[MAX_N_CODES][3]; //this can get big fast!
 int buffer_counter=-1;
 int MIDI_time_buffer[MAX_N_CODES];
-int current_time_index = 1;
+int current_time_index = 0;
 int max_time_index = MAX_N_BEATS*MIDI_PPQN;
-int CC_counter = 0;
-int PB_counter = 0;
-int AT_counter = 0;
+int CC_counter = 0, MODWHEEL_on = 0;
+int PB_counter = 0, PB_on = 0;
+int is_recording = 0; //record incoming MIDI messages?
+int is_playing = 1;   //playback the recorded MIDI messages?
+
+class Button {
+  private:
+    int pin;
+    
+  public:
+    int state;
+    int has_state_changed;
+    Button(int p) {
+      pin = p;
+      state = 0;
+      has_state_changed=0;
+
+      pinMode(pin, INPUT_PULLUP);  //prepare the input
+    }
+    
+    int update(void) {
+      int raw_val = !digitalRead(pin);
+      if (raw_val != state) {
+        state = raw_val;
+        has_state_changed=1;
+      } else {
+        has_state_changed = 0;
+      }
+      return state;
+    }
+};
+
+Button pushbutton[3] = {Button(2), Button(3), Button(4)};  //the MIDI Shield's 3 pushbuttons
+Button footswitch[2] = {Button(A2), Button(A3)}; //I've got footswitches attached to these analog inputs
+
 
 // other variables
 //int FS1,FS2; //foot swtiches connected to the analog inputs
@@ -57,26 +90,27 @@ int AT_counter = 0;
 void setup() {
   pinMode(STAT1,OUTPUT); //prepare the LED outputs
   pinMode(STAT2,OUTPUT); //prepare the LED outputs
-
+  
   //initialize the time codes
-  for (int i=0; i < MAX_N_CODES; i++) MIDI_time_buffer[i] = -1;
+  clearRecordedMIDI();
   
   //start serial with midi baudrate 31250
   Serial.begin(31250);     
 }
 
 void loop () {
-  turnOffStatLight(STAT1);     //turn off the STAT1 light
+  if (is_recording) { turnOnStatLight(STAT1); } else { turnOffStatLight(STAT1); };
+  if (is_playing) { turnOnStatLight(STAT2); } else { turnOffStatLight(STAT2); };
   
   //Are there any MIDI messages?
   if(Serial.available() > 0)
-  {    
+  {     
     //read the byte
     foo_byte = Serial.read();
 
     //what kind of message is it?
     if (foo_byte == MIDI_CLOCK) { //MIDI CLOCK
-      if (ECHOMIDI_CLOCK) Serial.println(foo_byte,HEX);
+      //if (ECHOMIDI_CLOCK) Serial.println(foo_byte,HEX);
       current_time_index++;
       if (current_time_index >= max_time_index) current_time_index = 0;
       resetMessageCounters();
@@ -84,11 +118,12 @@ void loop () {
       
     } else { //not a MIDI Clock
       if (ECHOMIDI) { Serial.print(foo_byte,HEX); Serial.print(" "); }
-      if (foo_byte & (0b10000000+MIDI_CHAN)) { //start of MIDI_Message (for this channel)
+      if (ECHOMIDI_BIN | is_recording) { Serial.write(foo_byte); }
+      if (foo_byte & (0b10000000+MIDI_CHAN)) { //bitwise compare to detect start of MIDI_Message (for this channel)
         turnOnStatLight(STAT1);   //turn on the STAT1 light indicating that it's received some Serial comms
-        if (byte_counter > 0) saveMessage(current_time_index);  //save the previously started message
+        if (byte_counter > 0) saveMessage(current_time_index,rx_bytes);  //save the previously started message
         clear_rx_bytes();  byte_counter = -1; //clear the temporary storage
-        if ((foo_byte == NOTE_ON) || (foo_byte == NOTE_OFF) || (foo_byte == MIDI_CC) || (foo_byte == MIDI_PB) || (foo_byte == MIDI_AT)) {
+        if ((foo_byte == NOTE_ON) || (foo_byte == NOTE_OFF) || (foo_byte == MIDI_CC) || (foo_byte == MIDI_PB)) {
           byte_counter++; 
           //Serial.print("start, byte_count "); Serial.println(byte_counter);
           rx_bytes[byte_counter] = foo_byte; //only store these certain types of messages
@@ -101,32 +136,139 @@ void loop () {
         byte_counter++; rx_bytes[byte_counter] = foo_byte;
       }
       //if we've gotten all three bytes, save the message
-      if (byte_counter == (3-1)) { saveMessage(current_time_index);  clear_rx_bytes();  byte_counter = -1; }
+      if (byte_counter == (3-1)) { saveMessage(current_time_index,rx_bytes);  clear_rx_bytes();  byte_counter = -1; }
     } //close if MIDI Clock
+    
   } else {    //if Serial.isAvailable()
+
+    //check the pushbuttons and footswitches
     delay(1);
-  }
-}
+    for (int i=0; i<3; i++) pushbutton[i].update();
+    for (int i=0; i<2; i++) footswitch[i].update();
+
+    //act on the footswitches
+    if (footswitch[0].has_state_changed) setRecordingState(footswitch[0].state,current_time_index);
+
+    //act on the pushbuttons (once released)
+    if ((pushbutton[1].state == 0) && (pushbutton[1].has_state_changed)) togglePlaybackState();
+    if ((pushbutton[2].state == 0) && (pushbutton[2].has_state_changed)) stopAllNotes();
+    
+    //act on combo-presses foe the push buttons...clear the MIDI recording?
+    if ((pushbutton[0].state==1) & (pushbutton[2].state==1)) clearRecordedMIDI();  //combo to clear memory
+    
+  } //end if Serial.isAvailable()
+} //end loop()
 
 void resetMessageCounters(void) {
   CC_counter = 0;
   PB_counter = 0;
-  AT_counter = 0;
+}
+
+void setRecordingState(int state, int cur_time_ind) {
+  if (is_recording && (state==0)) {
+    //turning OFF recording...
+    addNoteOffMidiCodes(cur_time_ind);       //if needed, create NOTE_OFF for any open notes
+
+    //recenter the pitch and mod wheels
+    addPitchAndModCenterCodes(cur_time_ind); //if needed, create centering coes for pitch and mod wheels
+  } else {
+    //turning on recording...
+    MODWHEEL_on = 0;
+    PB_on = 0;
+  }
+  clear_rx_bytes();
+  is_recording = state;
+}
+
+void togglePlaybackState(void) {
+  stopPlayedNotes();
+  is_playing = !is_playing;
+}
+
+void stopAllNotes(void) {  //http://www.music-software-development.com/midi-tutorial.html
+  Serial.write(0b10110000+MIDI_CHAN); //CC
+  Serial.write((byte)123); //all notes off
+  Serial.write((byte)0);
+}
+
+void clearRecordedMIDI(void) {
+  stopPlayedNotes();
+  for (int i=0; i < MAX_N_CODES; i++) MIDI_time_buffer[i] = -1;
+  resetMessageCounters();
+}
+
+void stopPlayedNotes(void) {
+  //step through all the codes and stop those those that had been played
+  for (int i=0; i < MAX_N_CODES; i++) { //step through ALL time because they may be out of order (from layer-on-layer recording)
+    if (MIDI_time_buffer[i] > -1) {
+      if (MIDI_command_buffer[i][0] == NOTE_ON) {
+        Serial.write(NOTE_OFF);
+        Serial.write(MIDI_command_buffer[i][1]);
+        Serial.write(MIDI_command_buffer[i][2]);
+      }
+    }
+  }
+}
+
+void addNoteOffMidiCodes(int cur_time_ind) {
+  //step through array and see if any notes are open;
+  for (int i=0; i < MAX_N_CODES; i++) {
+    if (MIDI_time_buffer[i] > -1) { //is it a valid entry?
+      if (MIDI_command_buffer[i][0] == NOTE_ON) { //is this a NOTE_ON message
+        byte note_num = MIDI_command_buffer[i][1];
+        
+        //this is a note on message, count how many note on and note off for this note number
+        int noteOn_count = countCodesEqualTo(NOTE_ON,(2-1),note_num);  //note_num is the 2nd byte in the MIDI message
+        int noteOff_count = countCodesEqualTo(NOTE_OFF,(2-1),note_num);//note_num is the 2nd byte in the MIDI message
+
+        //If there is an imbalance of NOTE_ON and NOTE_OFF, make NOTE_OFF messages
+        if (noteOn_count > noteOff_count) {
+          //create NOTE_OFF message
+          byte new_message[] = {(byte)NOTE_OFF, (byte)note_num, (byte)64};
+
+          //add the NOTE_OFF mesage to the MIDI command buffer
+          for (int j=noteOff_count; j < noteOn_count; j++) { //add a notoff for every extra note on
+            saveMessage(cur_time_ind,new_message);
+          }
+        }
+      }
+    }
+  }
+}
+
+void addPitchAndModCenterCodes(int cur_time_ind) {
+  if (MODWHEEL_on) {
+    byte new_message[] = {MIDI_CC, MODWHEEL_CC, (byte)0x00};
+    saveMessage(cur_time_ind, new_message);
+    MODWHEEL_on = 0; //flag MODWHEEL as off
+  }
+  if (PB_on) {
+    byte new_message[] = {MIDI_PB, 0x00, 0x40}; //this is PB centered on my Prophet 6
+    saveMessage(cur_time_ind,new_message);
+    PB_on = 0;  //flag PitchBend as off
+  }
+}
+
+int countCodesEqualTo(byte MIDI_code,int byte_ind, byte test_value) {
+  int count=0;
+  byte stored_value;
+  for (int i=0; i < MAX_N_CODES; i++) { //loop over all entries
+    if (MIDI_time_buffer[i] > -1) { //is it a valid entry?
+      if (MIDI_command_buffer[i][0] == MIDI_code) {
+        if (MIDI_command_buffer[i][byte_ind] == test_value) count++;
+      }
+    }
+  }
+  return count;
 }
 
 void playCodesForThisTimeStep(int cur_time_ind) {
-  //Serial.print("playCodes "); Serial.println(cur_time_ind);
   //step through all the codes and play those at this timestep
-  for (int i=0; i < MAX_N_CODES; i++) { //step through ALL time because they may be out of order (from layer-on-layer recording)
-    if (MIDI_time_buffer[i] == cur_time_ind) {
-      //Serial.print("playing! "); Serial.print(cur_time_ind); Serial.print(" ");Serial.println(MIDI_command_buffer[i][0],HEX);
-      turnOnStatLight(STAT2);   //turn on the STAT1 light indicating that it's received some Serial comms
-      Serial.write(MIDI_command_buffer[i][0]);
-      Serial.write(MIDI_command_buffer[i][1]);
-      Serial.write(MIDI_command_buffer[i][2]);
+  if (is_playing) {
+    for (int i=0; i < MAX_N_CODES; i++) { //step through ALL time because they may be out of order (from layer-on-layer recording)
+      if (MIDI_time_buffer[i] == cur_time_ind) Serial.write(MIDI_command_buffer[i],3); //send the three byte MIDI message
     }
   }
-  turnOffStatLight(STAT2);   //turn on the STAT1 light indicating that it's received some Serial comms
 }
 
 void clear_rx_bytes(void) {
@@ -135,44 +277,46 @@ void clear_rx_bytes(void) {
   rx_bytes[2]=0;
 }
 
-void saveMessage(int cur_time_ind) {
-  //Serial.print("saveMess "); Serial.print(rx_bytes[0],HEX);  Serial.print(" "); Serial.println(cur_time_ind);
-  switch (rx_bytes[0]) {
-    case (NOTE_ON):
-      saveThisMessage(cur_time_ind); //save all of this type of message
-      break;
-    case (NOTE_OFF):
-      saveThisMessage(cur_time_ind); //save all of this type of message
-      break;
-    case (MIDI_CC):
-      if (CC_counter == 0) { //save only the first of this message type
-        saveThisMessage(cur_time_ind); 
-        CC_counter++;
-      }
-      break;
-    case (MIDI_PB):
-      if (PB_counter == 0) { //save only the first of this message type
-        saveThisMessage(cur_time_ind); 
-        PB_counter++;
-      }
-      break;
-    case (MIDI_AT):
-      if (AT_counter == 0) { //save only the first of this message type
-        saveThisMessage(cur_time_ind); 
-        AT_counter++;
-      }
-      break;  
+void saveMessage(int cur_time_ind, byte given_bytes[]) {
+  if (is_recording) {
+    //Serial.print("saveMess "); Serial.print(rx_bytes[0],HEX);  Serial.print(" "); Serial.println(cur_time_ind);
+    switch (given_bytes[0]) {
+      case (NOTE_ON):
+        saveThisMessage(cur_time_ind, given_bytes); //save all of this type of message
+        break;
+      case (NOTE_OFF):
+        saveThisMessage(cur_time_ind, given_bytes); //save all of this type of message
+        break;
+      case (MIDI_CC):
+        if (CC_counter == 0) { //save only the first of this message type
+          saveThisMessage(cur_time_ind, given_bytes); 
+          CC_counter++;
+          if (given_bytes[1] == MODWHEEL_CC) {
+            MODWHEEL_on = 1;
+            if (given_bytes[2] == 0x00) MODWHEEL_on = 0;
+          }
+        }
+        break;
+      case (MIDI_PB):
+        if (PB_counter == 0) { //save only the first of this message type
+          saveThisMessage(cur_time_ind, given_bytes); 
+          PB_counter++;
+          PB_on = 1; if ((given_bytes[1] == 0x00) && (given_bytes[2] == 0x40)) PB_on = 0;
+        }
+        break;
+    }
   }
 }
 
-void saveThisMessage(int cur_time_ind) {
-  buffer_counter++; 
-  //Serial.print("saveThisMess "); Serial.print(rx_bytes[0],HEX); Serial.print(" ");Serial.println(buffer_counter);
-  if (buffer_counter >= MAX_N_CODES) buffer_counter=0;  //overwrite the beginning, if necessary
-  MIDI_time_buffer[buffer_counter] = cur_time_ind;
-  MIDI_command_buffer[buffer_counter][0] = rx_bytes[0];
-  MIDI_command_buffer[buffer_counter][1] = rx_bytes[1];
-  MIDI_command_buffer[buffer_counter][2] = rx_bytes[2];
+void saveThisMessage(int cur_time_ind, byte given_bytes[]) {
+  if (is_recording) {
+    buffer_counter++; 
+    if (buffer_counter >= MAX_N_CODES) buffer_counter=0;  //overwrite the beginning, if necessary
+    MIDI_time_buffer[buffer_counter] = cur_time_ind;
+    MIDI_command_buffer[buffer_counter][0] = given_bytes[0];
+    MIDI_command_buffer[buffer_counter][1] = given_bytes[1];
+    MIDI_command_buffer[buffer_counter][2] = given_bytes[2];
+  }
 }
 
 
