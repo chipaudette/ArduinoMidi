@@ -132,7 +132,7 @@ void loop () {
       
     } else { //not a MIDI Clock
       if (ECHOMIDI) { Serial.print(foo_byte,HEX); Serial.print(" "); }
-      if (ECHOMIDI_BIN | is_recording) { Serial.write(foo_byte); }
+      if (ECHOMIDI_BIN) { Serial.write(foo_byte); }
       if (foo_byte & (0b10000000+MIDI_CHAN)) { //bitwise compare to detect start of MIDI_Message (for this channel)
         turnOnStatLight(STAT1);   //turn on the STAT1 light indicating that it's received some Serial comms
         if (byte_counter > 0) saveMessage(current_time_index,rx_bytes);  //save the previously started message
@@ -322,14 +322,17 @@ void clear_rx_bytes(void) {
 }
 
 void saveMessage(const int &cur_time_ind, byte given_bytes[]) {
+  int ind;
   if (is_recording) {
     //Serial.print("saveMess "); Serial.print(rx_bytes[0],HEX);  Serial.print(" "); Serial.println(cur_time_ind);
     switch (given_bytes[0]) {
       case (NOTE_ON):
-        saveThisNoteOnMessage(cur_time_ind, given_bytes[1],given_bytes[2]);
+        ind = saveThisNoteOnMessage(cur_time_ind, given_bytes[1],given_bytes[2]);
+        if ((ind > -1) & (!ECHOMIDI_BIN)) sendNoteOnMessage(ind); //echo the note on message
         break;
       case (NOTE_OFF):
-        saveThisNoteOffMessage(cur_time_ind, given_bytes[1],given_bytes[2]);
+        ind = saveThisNoteOffMessage(cur_time_ind, given_bytes[1],given_bytes[2]);
+        if ((ind > -1) & (!ECHOMIDI_BIN)) sendNoteOffMessage(ind); //echo the note off message
         break;
       case (MIDI_CC):
         if (CC_counter == 0) { //save only the first of this message type
@@ -352,7 +355,7 @@ void saveMessage(const int &cur_time_ind, byte given_bytes[]) {
   }
 }
 
-void saveThisMessage(const int &cur_time_ind, byte given_bytes[]) {
+int saveThisMessage(const int &cur_time_ind, byte given_bytes[]) {
   if (is_recording) {
     buffer_counter++; 
     if (buffer_counter >= MAX_N_CODES) buffer_counter=0;  //overwrite the beginning, if necessary
@@ -360,10 +363,12 @@ void saveThisMessage(const int &cur_time_ind, byte given_bytes[]) {
     MIDI_command_buffer[buffer_counter][0] = given_bytes[0];
     MIDI_command_buffer[buffer_counter][1] = given_bytes[1];
     MIDI_command_buffer[buffer_counter][2] = given_bytes[2];
+    return buffer_counter;
   }
+  return -1;
 }
 
-void saveThisNoteOnMessage(const int &cur_time_ind, const byte &noteNum, const byte &vel) {
+int saveThisNoteOnMessage(const int &cur_time_ind, const byte &noteNum, const byte &vel) {
   if (is_recording) {
     incrementNoteCounter();
 
@@ -372,7 +377,9 @@ void saveThisNoteOnMessage(const int &cur_time_ind, const byte &noteNum, const b
     MIDI_note_buffer[current_MIDI_Note_Index].timeOff = -1;
     MIDI_note_buffer[current_MIDI_Note_Index].noteNum = noteNum;
     MIDI_note_buffer[current_MIDI_Note_Index].onVel = vel;
+    return current_MIDI_Note_Index;
   }
+  return -1;
 }
 
 void incrementNoteCounter(void) {
@@ -402,15 +409,17 @@ void sendNoteOnMessage(const int &ind) {
   MIDI_note_buffer[ind].isActive=1;
 }
 
-void saveThisNoteOffMessage(const int &cur_time_ind, const byte &noteNum, const byte &vel) {
+int saveThisNoteOffMessage(const int &cur_time_ind, const byte &noteNum, const byte &vel) {
   if (is_recording) {
     int ind = findNoteInBuffer(noteNum);
-    if (ind < 0) return;
+    if (ind < 0) return ind;
 
     //save the note information
     MIDI_note_buffer[ind].timeOff = cur_time_ind;
     MIDI_note_buffer[ind].offVel = vel;
+    return ind;
   }
+  return -1;
 }
 
 int findNoteInBuffer(const byte &noteNum) {
