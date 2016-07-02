@@ -19,8 +19,8 @@
 #define ECHOMIDI_CLOCK (false)
 
 // define sequencer limits
-#define MAX_N_BEATS (8)    //number of beats (quarter notes) to loop
-#define MAX_N_CODES (200)  //make this small enough so that 4*N_STORED_CODES bytes fits in memory
+#define MAX_N_BEATS (16)    //number of beats (quarter notes) to loop
+#define MAX_N_CODES (50)  //make this small enough so that 4*N_STORED_CODES bytes fits in memory
 
 // MIDI Code information
 #define MIDI_PPQN  (24)   //MIDI clock "pulses per quarter note"
@@ -52,6 +52,19 @@ int CC_counter = 0, MODWHEEL_on = 0;
 int PB_counter = 0, PB_on = 0;
 int is_recording = 0; //record incoming MIDI messages?
 int is_playing = 1;   //playback the recorded MIDI messages?
+
+#define MAX_N_NOTES 120
+typedef struct MIDI_Note_t {
+    boolean isActive;
+    int timeOn;
+    int timeOff;
+    byte noteNum;
+    byte onVel;
+    byte offVel;
+};
+MIDI_Note_t MIDI_note_buffer[MAX_N_NOTES];
+int current_MIDI_Note_Index=0;
+
 
 class Button {
   private:
@@ -99,6 +112,7 @@ void setup() {
 }
 
 void loop () {
+  //update status lights
   if (is_recording) { turnOnStatLight(STAT1); } else { turnOffStatLight(STAT1); };
   if (is_playing) { turnOnStatLight(STAT2); } else { turnOffStatLight(STAT2); };
   
@@ -140,9 +154,9 @@ void loop () {
     } //close if MIDI Clock
     
   } else {    //if Serial.isAvailable()
+    delay(1); //just to keep from looping too fast
 
     //check the pushbuttons and footswitches
-    delay(1);
     for (int i=0; i<3; i++) pushbutton[i].update();
     for (int i=0; i<2; i++) footswitch[i].update();
 
@@ -155,6 +169,13 @@ void loop () {
     
     //act on combo-presses foe the push buttons...clear the MIDI recording?
     if ((pushbutton[0].state==1) & (pushbutton[2].state==1)) clearRecordedMIDI();  //combo to clear memory
+
+    //check potentiometer to set max length of loop
+    if (analogRead(KNOB1) < 511) {  //the wheel turns backwards!  smaller values mean the knob is more clockwise
+      max_time_index = MAX_N_BEATS*MIDI_PPQN;
+    } else {
+      max_time_index = MAX_N_BEATS*MIDI_PPQN/2;
+    }
     
   } //end if Serial.isAvailable()
 } //end loop()
@@ -194,45 +215,58 @@ void stopAllNotes(void) {  //http://www.music-software-development.com/midi-tuto
 void clearRecordedMIDI(void) {
   stopPlayedNotes();
   for (int i=0; i < MAX_N_CODES; i++) MIDI_time_buffer[i] = -1;
+  for (int i=0; i < MAX_N_NOTES; i++) { 
+    if (MIDI_note_buffer[i].isActive) sendNoteOffMessage(i);
+    MIDI_note_buffer[i].timeOn = -1; 
+    MIDI_note_buffer[i].timeOff = -1; 
+  };
   resetMessageCounters();
 }
 
 void stopPlayedNotes(void) {
   //step through all the codes and stop those those that had been played
-  for (int i=0; i < MAX_N_CODES; i++) { //step through ALL time because they may be out of order (from layer-on-layer recording)
-    if (MIDI_time_buffer[i] > -1) {
-      if (MIDI_command_buffer[i][0] == NOTE_ON) {
-        Serial.write(NOTE_OFF);
-        Serial.write(MIDI_command_buffer[i][1]);
-        Serial.write(MIDI_command_buffer[i][2]);
-      }
-    }
+  //for (int i=0; i < MAX_N_CODES; i++) { //step through ALL time because they may be out of order (from layer-on-layer recording)
+  //  if (MIDI_time_buffer[i] > -1) {
+  //    if (MIDI_command_buffer[i][0] == NOTE_ON) {
+  //      Serial.write(NOTE_OFF);
+  //      Serial.write(MIDI_command_buffer[i][1]);
+  //      Serial.write(MIDI_command_buffer[i][2]);
+  //    }
+  //  }
+  //}
+  for (int i=0; i < MAX_N_NOTES; i++ ) {
+    if (MIDI_note_buffer[i].isActive) sendNoteOffMessage(i);
   }
 }
 
 void addNoteOffMidiCodes(int cur_time_ind) {
   //step through array and see if any notes are open;
-  for (int i=0; i < MAX_N_CODES; i++) {
-    if (MIDI_time_buffer[i] > -1) { //is it a valid entry?
-      if (MIDI_command_buffer[i][0] == NOTE_ON) { //is this a NOTE_ON message
-        byte note_num = MIDI_command_buffer[i][1];
-        
-        //this is a note on message, count how many note on and note off for this note number
-        int noteOn_count = countCodesEqualTo(NOTE_ON,(2-1),note_num);  //note_num is the 2nd byte in the MIDI message
-        int noteOff_count = countCodesEqualTo(NOTE_OFF,(2-1),note_num);//note_num is the 2nd byte in the MIDI message
-
-        //If there is an imbalance of NOTE_ON and NOTE_OFF, make NOTE_OFF messages
-        if (noteOn_count > noteOff_count) {
-          //create NOTE_OFF message
-          byte new_message[] = {(byte)NOTE_OFF, (byte)note_num, (byte)64};
-
-          //add the NOTE_OFF mesage to the MIDI command buffer
-          for (int j=noteOff_count; j < noteOn_count; j++) { //add a notoff for every extra note on
-            saveMessage(cur_time_ind,new_message);
-            Serial.write(new_message,3); //and write the new message to turn off the note
-          }
-        }
-      }
+//  for (int i=0; i < MAX_N_CODES; i++) {
+//    if (MIDI_time_buffer[i] > -1) { //is it a valid entry?
+//      if (MIDI_command_buffer[i][0] == NOTE_ON) { //is this a NOTE_ON message
+//        byte note_num = MIDI_command_buffer[i][1];
+//        
+//        //this is a note on message, count how many note on and note off for this note number
+//        int noteOn_count = countCodesEqualTo(NOTE_ON,(2-1),note_num);  //note_num is the 2nd byte in the MIDI message
+//        int noteOff_count = countCodesEqualTo(NOTE_OFF,(2-1),note_num);//note_num is the 2nd byte in the MIDI message
+//
+//        //If there is an imbalance of NOTE_ON and NOTE_OFF, make NOTE_OFF messages
+//        if (noteOn_count > noteOff_count) {
+//          //create NOTE_OFF message
+//          byte new_message[] = {(byte)NOTE_OFF, (byte)note_num, (byte)64};
+//
+//          //add the NOTE_OFF mesage to the MIDI command buffer
+//          for (int j=noteOff_count; j < noteOn_count; j++) { //add a notoff for every extra note on
+//            saveMessage(cur_time_ind,new_message);
+//            Serial.write(new_message,3); //and write the new message to turn off the note
+//          }
+//        }
+//      }
+//    }
+//  }
+  for (int i=0; i < MAX_N_NOTES; i++) {
+    if ((MIDI_note_buffer[i].timeOn > -1) & (MIDI_note_buffer[i].timeOff < 0)) {
+      saveThisNoteOffMessage(cur_time_ind,MIDI_note_buffer[i].noteNum,(byte)64);
     }
   }
 }
@@ -250,7 +284,7 @@ void addPitchAndModCenterCodes(int cur_time_ind) {
   }
 }
 
-int countCodesEqualTo(byte MIDI_code,int byte_ind, byte test_value) {
+int countCodesEqualTo(const byte &MIDI_code,const int &byte_ind, const byte &test_value) {
   int count=0;
   byte stored_value;
   for (int i=0; i < MAX_N_CODES; i++) { //loop over all entries
@@ -266,6 +300,13 @@ int countCodesEqualTo(byte MIDI_code,int byte_ind, byte test_value) {
 void playCodesForThisTimeStep(int cur_time_ind) {
   //step through all the codes and play those at this timestep
   if (is_playing) {
+    //look through the note buffer
+    for (int i=0; i < MAX_N_NOTES; i++) {
+      if (MIDI_note_buffer[i].timeOn == cur_time_ind) sendNoteOnMessage(i);
+      if (MIDI_note_buffer[i].timeOff == cur_time_ind) sendNoteOffMessage(i);
+    }
+    
+    //look through the other MIDI code buffer
     for (int i=0; i < MAX_N_CODES; i++) { //step through ALL time because they may be out of order (from layer-on-layer recording)
       if (MIDI_time_buffer[i] == cur_time_ind) Serial.write(MIDI_command_buffer[i],3); //send the three byte MIDI message
     }
@@ -278,15 +319,15 @@ void clear_rx_bytes(void) {
   rx_bytes[2]=0;
 }
 
-void saveMessage(int cur_time_ind, byte given_bytes[]) {
+void saveMessage(const int &cur_time_ind, byte given_bytes[]) {
   if (is_recording) {
     //Serial.print("saveMess "); Serial.print(rx_bytes[0],HEX);  Serial.print(" "); Serial.println(cur_time_ind);
     switch (given_bytes[0]) {
       case (NOTE_ON):
-        saveThisMessage(cur_time_ind, given_bytes); //save all of this type of message
+        saveThisNoteOnMessage(cur_time_ind, given_bytes[1],given_bytes[2]);
         break;
       case (NOTE_OFF):
-        saveThisMessage(cur_time_ind, given_bytes); //save all of this type of message
+        saveThisNoteOffMessage(cur_time_ind, given_bytes[1],given_bytes[2]);
         break;
       case (MIDI_CC):
         if (CC_counter == 0) { //save only the first of this message type
@@ -309,7 +350,7 @@ void saveMessage(int cur_time_ind, byte given_bytes[]) {
   }
 }
 
-void saveThisMessage(int cur_time_ind, byte given_bytes[]) {
+void saveThisMessage(const int &cur_time_ind, byte given_bytes[]) {
   if (is_recording) {
     buffer_counter++; 
     if (buffer_counter >= MAX_N_CODES) buffer_counter=0;  //overwrite the beginning, if necessary
@@ -320,11 +361,72 @@ void saveThisMessage(int cur_time_ind, byte given_bytes[]) {
   }
 }
 
+void saveThisNoteOnMessage(const int &cur_time_ind, const byte &noteNum, const byte &vel) {
+  if (is_recording) {
+    incrementNoteCounter();
 
-void turnOnStatLight(int pin) {
+    //save the note information
+    MIDI_note_buffer[current_MIDI_Note_Index].timeOn = cur_time_ind;
+    MIDI_note_buffer[current_MIDI_Note_Index].timeOff = -1;
+    MIDI_note_buffer[current_MIDI_Note_Index].noteNum = noteNum;
+    MIDI_note_buffer[current_MIDI_Note_Index].onVel = vel;
+  }
+}
+
+void incrementNoteCounter(void) {
+  current_MIDI_Note_Index++; 
+  if (current_MIDI_Note_Index >= MAX_N_NOTES) {
+    current_MIDI_Note_Index=0;  //overwrite the beginning, if necessary
+    if (MIDI_note_buffer[current_MIDI_Note_Index].isActive) { //before overwriting the note, should we turn it off first?
+      if (MIDI_note_buffer[current_MIDI_Note_Index].timeOff > -1) { //it is a valid noteOff message
+        //write the Note Off message
+        sendNoteOffMessage(current_MIDI_Note_Index);
+      }
+    }
+  }
+}
+
+void sendNoteOffMessage(const int &ind) {
+  Serial.write(NOTE_OFF);
+  Serial.write(MIDI_note_buffer[ind].noteNum);
+  Serial.write(MIDI_note_buffer[ind].offVel);
+  MIDI_note_buffer[ind].isActive=0;
+}
+
+void sendNoteOnMessage(const int &ind) {
+  Serial.write(NOTE_ON);
+  Serial.write(MIDI_note_buffer[ind].noteNum);
+  Serial.write(MIDI_note_buffer[ind].onVel);
+  MIDI_note_buffer[ind].isActive=1;
+}
+
+void saveThisNoteOffMessage(const int &cur_time_ind, const byte &noteNum, const byte &vel) {
+  if (is_recording) {
+    int ind = findNoteInBuffer(noteNum);
+    if (ind < 0) return;
+
+    //save the note information
+    MIDI_note_buffer[ind].timeOff = cur_time_ind;
+    MIDI_note_buffer[ind].offVel = vel;
+  }
+}
+
+int findNoteInBuffer(const byte &noteNum) {
+  int ind = -1;
+  for (int i=0; i<MAX_N_NOTES; i++)  {
+    if (MIDI_note_buffer[i].noteNum == noteNum) {
+      if (MIDI_note_buffer[i].timeOff < 0) {
+        return i;
+      }
+    }
+  }
+  return ind;
+}
+
+void turnOnStatLight(const int &pin) {
   digitalWrite(pin,LOW);
 }
-void turnOffStatLight(int pin) {
+void turnOffStatLight(const int &pin) {
   digitalWrite(pin,HIGH);
 }
 
