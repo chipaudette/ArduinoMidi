@@ -266,7 +266,9 @@ void addNoteOffMidiCodes(int cur_time_ind) {
 //  }
   for (int i=0; i < MAX_N_NOTES; i++) {
     if ((MIDI_note_buffer[i].timeOn > -1) & (MIDI_note_buffer[i].timeOff < 0)) {
-      saveThisNoteOffMessage(cur_time_ind,MIDI_note_buffer[i].noteNum,(byte)64);
+      byte new_message[] = {(byte)NOTE_OFF, (byte)MIDI_note_buffer[i].noteNum, (byte)64};
+      saveThisNoteOffMessage(cur_time_ind,new_message[1],new_message[2]);
+      Serial.write(new_message,3); //and write the new message to turn off the note
     }
   }
 }
