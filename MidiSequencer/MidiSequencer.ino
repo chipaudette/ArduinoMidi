@@ -153,7 +153,7 @@ void resetMessageCounters(void) {
 
 void updateMaxTimeIndex(const int &knob_val) {
   static const int n_table = 8;
-  static int value_bounds[n_table] = {-1, 511, 767, 895, 959, 991, 1007, 5000}; //end with some very large value
+  static int value_bounds[n_table] = {-1, 511-50, 767-40, 895-30, 959-20, 991-10, 1007, 5000}; //end with some very large value
   static int max_times[n_table] = {MAX_MAX_TIME_INDEX, 8*MIDI_PPQN, 4*MIDI_PPQN, 2*MIDI_PPQN, MIDI_PPQN, MIDI_PPQN/2, MIDI_PPQN/4, MIDI_PPQN/8}; //end with some value that doesn't matter
   int prev_max_time_index = max_time_index;
 
