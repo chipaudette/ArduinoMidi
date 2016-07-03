@@ -39,7 +39,7 @@ int MIDI_time_buffer[MAX_N_CODES];
 int buffer_counter=-1;
 int raw_current_time_index = 0;
 int current_time_index = 0;
-boolean haveAnyMessagesBeenSaved = false;
+boolean hasTimeCounterBeenExternallySet = false;
 #define MAX_MAX_TIME_INDEX (MAX_N_BEATS*MIDI_PPQN)
 int max_time_index = MAX_MAX_TIME_INDEX;
 int CC_counter = 0, MODWHEEL_on = 0;
@@ -79,6 +79,13 @@ void loop () {
       
       if (ECHOMIDI_CLOCK) Serial.println(foo_byte,HEX);
       incrementTheTimeAndAct();
+      
+    } else if (foo_byte == MIDI_START) {
+      
+      if (ECHOMIDI) { Serial.print(foo_byte,HEX); Serial.print(" "); }
+      if (ECHOMIDI_BIN) { Serial.write(foo_byte); }
+      resetCurTimeIndex();
+      hasTimeCounterBeenExternallySet = true;
       
     } else { //not a MIDI Clock
       
@@ -202,7 +209,7 @@ void clearRecordedMIDI(void) {
   note_buffer.clear();
   for (int i=0; i < MAX_N_CODES; i++) MIDI_time_buffer[i] = -1;
   resetMessageCounters();
-  haveAnyMessagesBeenSaved = false;
+  hasTimeCounterBeenExternallySet = false;
 }
 
 void addPitchAndModCenterCodes(int cur_time_ind) {
@@ -241,7 +248,10 @@ void saveMessage(int cur_time_ind, byte given_bytes[]) {
   if (is_recording) {
     //Serial.print("saveMess "); Serial.print(rx_bytes[0],HEX);  Serial.print(" "); Serial.println(cur_time_ind);
 
-    if (haveAnyMessagesBeenSaved==false) cur_time_ind = resetCurTimeIndex();
+    if (hasTimeCounterBeenExternallySet==false) {
+      cur_time_ind = resetCurTimeIndex();
+      hasTimeCounterBeenExternallySet = true;
+    }
     
     switch (given_bytes[0]) {
       case (NOTE_ON):
@@ -271,7 +281,6 @@ void saveMessage(int cur_time_ind, byte given_bytes[]) {
         break;
     }
     
-    haveAnyMessagesBeenSaved = true; 
   }
 }
 

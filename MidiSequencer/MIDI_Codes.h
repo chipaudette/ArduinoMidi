@@ -6,6 +6,7 @@
 #define MIDI_PPQN  (24)   //MIDI clock "pulses per quarter note"
 #define MIDI_CHAN  (0x00) //0x00 is omni 
 #define MIDI_CLOCK (0xF8) //Code for MIDI Clock
+#define MIDI_START (0xFA)  //start clock...is this also a clock code?
 #define NOTE_ON    (0x90+MIDI_CHAN) //Code for MIDI Note On
 #define NOTE_OFF   (0x80+MIDI_CHAN) //Code for MIDI Note Off
 #define MIDI_CC    (0xB0+MIDI_CHAN) //Code for MIDI CC
