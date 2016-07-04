@@ -23,7 +23,7 @@
 
 // define sequencer limits
 #define MAX_N_BEATS (16)    //number of beats (quarter notes) to loop
-#define MAX_N_CODES (50)  //make this small enough so that 4*N_STORED_CODES bytes fits in memory
+#define MAX_N_CODES (80)  //make this small enough so that 4*N_STORED_CODES bytes fits in memory
 
 // defines for MIDI Shield components (NOT needed if you just want to echo the MIDI codes)
 #define KNOB1  0   //potentiometer on sparkfun MIDI shield
@@ -117,7 +117,8 @@ void receiveMIDIByteAndAct(const byte &foo_byte) {
     turnOnStatLight(STAT1);   //turn on the STAT1 light indicating that it's received some Serial comms
     if (byte_counter > 0) saveMessage(current_time_index,rx_bytes);  //save the previously started message
     clear_rx_bytes();  byte_counter = -1; //clear the temporary storage
-    if ((foo_byte == NOTE_ON) || (foo_byte == NOTE_OFF) || (foo_byte == MIDI_CC) || (foo_byte == MIDI_PB)) {
+    if ((foo_byte == NOTE_ON) || (foo_byte == NOTE_OFF) || (foo_byte == MIDI_CC) || (foo_byte == MIDI_PB)) { 
+    //if ((foo_byte == MIDI_CC) || (foo_byte == MIDI_PB)) {
       byte_counter++; 
       //Serial.print("start, byte_count "); Serial.println(byte_counter);
       rx_bytes[byte_counter] = foo_byte; //only store these certain types of messages
@@ -256,11 +257,11 @@ void saveMessage(int cur_time_ind, byte given_bytes[]) {
     switch (given_bytes[0]) {
       case (NOTE_ON):
         ind = note_buffer.saveThisNoteOnMessage(cur_time_ind, given_bytes[1],given_bytes[2]);
-        if ((ind > -1) & (!ECHOMIDI_BIN)) note_buffer.sendNoteOnMessage(ind); //echo the note on message
+        if ((ind > -1) && (!ECHOMIDI_BIN)) note_buffer.sendNoteOnMessage(ind); //echo the note on message
         break;
       case (NOTE_OFF):
         ind = note_buffer.saveThisNoteOffMessage(cur_time_ind, given_bytes[1],given_bytes[2]);
-        if ((ind > -1) & (!ECHOMIDI_BIN)) note_buffer.sendNoteOffMessage(ind); //echo the note off message
+        if ((ind > -1) && (!ECHOMIDI_BIN)) note_buffer.sendNoteOffMessage(ind); //echo the note off message
         break;
       case (MIDI_CC):
         if (CC_counter == 0) { //save only the first of this message type
@@ -285,14 +286,21 @@ void saveMessage(int cur_time_ind, byte given_bytes[]) {
 }
 
 int saveThisMessage(const int &cur_time_ind, byte given_bytes[]) {
+  //should only be used for pitch bend and CC messages
   if (is_recording) {
-    buffer_counter++; 
-    if (buffer_counter >= MAX_N_CODES) buffer_counter=0;  //overwrite the beginning, if necessary
-    MIDI_time_buffer[buffer_counter] = cur_time_ind;
-    MIDI_command_buffer[buffer_counter][0] = given_bytes[0];
-    MIDI_command_buffer[buffer_counter][1] = given_bytes[1];
-    MIDI_command_buffer[buffer_counter][2] = given_bytes[2];
-    return buffer_counter;
+    if ((buffer_counter == 0) || 
+        !(((MIDI_time_buffer[buffer_counter]>>1) == (cur_time_ind>>1)) && //only allow a new code every other MIDI time code
+          (MIDI_command_buffer[buffer_counter][0] == given_bytes[0]) &&
+          (MIDI_command_buffer[buffer_counter][1] == given_bytes[1]))) {
+          
+          buffer_counter++; 
+          if (buffer_counter >= MAX_N_CODES) buffer_counter=0;  //overwrite the beginning, if necessary
+          MIDI_time_buffer[buffer_counter] = cur_time_ind;
+          MIDI_command_buffer[buffer_counter][0] = given_bytes[0];
+          MIDI_command_buffer[buffer_counter][1] = given_bytes[1];
+          MIDI_command_buffer[buffer_counter][2] = given_bytes[2];
+          return buffer_counter;
+    }
   }
   return -1;
 }
